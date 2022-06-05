@@ -1,6 +1,6 @@
 ---
 title: "Randomization tutorial"
-output: html_notebook
+output: github_document
 ---
 
 ## Generating a population
