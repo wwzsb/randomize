@@ -1,0 +1,134 @@
+---
+title: "Randomization tutorial"
+output: html_notebook
+---
+
+## Generating a population
+
+```{r}
+install.packages("tidyverse")
+install.packages("randomNames")
+library(tidyverse)
+
+population_size <- 10e6
+sample_sizes <- c(10, 100, 1000, 1000000)
+num_simulations <- 10
+
+ethnicities <- c("Indian", "Asian", "Black", "Hispanic", "White", "Arabic")
+genders <- c("Female", "Male")
+
+population <- randomNames::randomNames(population_size,
+                                       return.complete.data = TRUE) %>%
+  mutate(gender = map_chr(gender, ~ genders[.x + 1]),
+         ethnicity = map_chr(ethnicity, ~ ethnicities[.x])) %>%
+  mutate(across(where(is.character), as.factor)) %>%
+  mutate(income = round(rnorm(population_size, 10e4, 10e3)))
+
+summary(population)
+
+population %>%
+  ggplot(aes(ethnicity, fill = ethnicity)) +
+  geom_bar()
+
+population %>%
+  ggplot(aes(gender, fill = gender)) +
+  geom_bar()
+
+population %>%
+  ggplot(aes(income)) +
+  geom_density()
+```
+
+## Random Sampling
+
+```{r}
+map(1:num_simulations, function(x) {
+  
+  map_dfr(sample_sizes, ~ population %>% sample_n(.x) %>%
+            mutate(size = .x)) %>%
+    # mutate(sim = sim_num) %>%
+    ggplot(aes(gender, fill = gender)) +
+    geom_bar() +
+    facet_wrap(~ size, scales = "free_y") +
+    theme(legend.position = "none")
+})
+```
+
+```{r}
+map(1:num_simulations, function(x) {
+  sample_sizes <- c(10, 100, 1000, 1000000)
+  
+  map_dfr(sample_sizes, ~ population %>% sample_n(.x) %>%
+            mutate(size = .x)) %>%
+    # mutate(sim = sim_num) %>%
+    ggplot(aes(ethnicity, fill = ethnicity)) +
+    geom_bar() +
+    facet_wrap(~ size, scales = "free_y") +
+    theme(legend.position = "none")
+})
+```
+
+```{r}
+map(1:num_simulations, function(x) {
+  sample_sizes <- c(10, 100, 1000, 1000000)
+  
+  map_dfr(sample_sizes, ~ population %>% sample_n(.x) %>%
+            mutate(size = .x)) %>%
+    ggplot(aes(income)) +
+    geom_histogram() +
+    facet_wrap(~ size, scales = "free_y") +
+    theme(legend.position = "none")
+})
+```
+## Random Assignment
+
+### Covariate balance
+
+```{r}
+map(1:num_simulations, function(x) {
+  sample_sizes <- c(10, 100, 1000, 1000000)
+  
+  map_dfr(sample_sizes, ~ population %>% sample_n(.x) %>%
+            mutate(size = .x) %>%
+            mutate(group = sample(c("treatment", "control"), .x, replace = TRUE))) %>%
+    ggplot(aes(income, color = group, fill = group)) +
+    geom_density(alpha = 0.2) +
+    facet_wrap(~ size, scales = "free_y")
+})
+```
+
+### Treatment effects 
+
+```{r}
+sample_sizes <- c(10, 100, 1000)
+
+rct_sims <- map(1:100, function(x) {
+ 
+  map_dfr(sample_sizes, ~ population %>% sample_n(.x) %>%
+            mutate(size = .x) %>%
+            mutate(group = sample(c("Treatment", "Control"), .x, replace = TRUE))) %>%
+    mutate(outcome = if_else(gender == "Male", income + 10000, income),
+           outcome = if_else(group == "Treatment", outcome + 5000, outcome)) %>%
+    group_by(size) %>%
+    group_map(~ lm(outcome ~ group, data = .x))
+})
+
+map(rct_sims, function(.x) {
+  map(.x, function(.y) {
+    .y %>% summary() %>% pluck("coefficients") %>% .["groupTreatment","Pr(>|t|)"]
+  })
+}) %>%
+  unlist() %>%
+  matrix(ncol = length(sample_sizes), byrow = TRUE) %>%
+  as_tibble() %>%
+  set_names(as.character(sample_sizes)) %>%
+  pivot_longer(everything()) %>%
+  # mutate(value = value < 0.1) %>%
+  ggplot(aes(value, fill = value)) +
+  # geom_bar() +
+  # geom_histogram(binwidth = 0.01) +
+  geom_density () +
+  facet_wrap(~ name, scales = "free_y", nrow = 3) +
+  geom_vline(xintercept = c(0.01, 0.05, 0.1), alpha = 0.2, color = "red")
+```
+
