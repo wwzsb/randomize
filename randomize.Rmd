@@ -75,7 +75,7 @@ map(1:num_simulations, function(x) {
   map_dfr(sample_sizes, ~ population %>% sample_n(.x) %>%
             mutate(size = .x)) %>%
     ggplot(aes(income)) +
-    geom_histogram() +
+    geom_histogram(bins = 30) +
     facet_wrap(~ size, scales = "free_y") +
     theme(legend.position = "none")
 })
@@ -122,13 +122,12 @@ map(rct_sims, function(.x) {
   matrix(ncol = length(sample_sizes), byrow = TRUE) %>%
   as_tibble() %>%
   set_names(as.character(sample_sizes)) %>%
-  pivot_longer(everything()) %>%
+  pivot_longer(everything(), values_to = "p-value") %>%
   # mutate(value = value < 0.1) %>%
-  ggplot(aes(value, fill = value)) +
+  ggplot(aes(`p-value`, fill = `p-value`)) +
   # geom_bar() +
   # geom_histogram(binwidth = 0.01) +
   geom_density () +
   facet_wrap(~ name, scales = "free_y", nrow = 3) +
-  geom_vline(xintercept = c(0.01, 0.05, 0.1), alpha = 0.2, color = "red")
+  geom_vline(xintercept = c(0.01, 0.05, 0.1), alpha = 0.2, color = "blue")
 ```
-
