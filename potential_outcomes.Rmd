@@ -1,0 +1,78 @@
+---
+title: "Potential Outcomes"
+output: html_notebook
+---
+
+An attempt at explaining the potential outcomes in words, code, data, and plots.
+
+## Setting up our population
+
+```{r}
+# install.packages("tidyverse")
+# install.packages("randomNames")
+library(tidyverse)
+
+population_size <- 1e6
+sample_sizes <- 10 ^ seq(1, log(population_size, 10))
+num_simulations <- 100
+base_income <- 1e4
+base_income_sd <- 1e3
+
+effect_size = 2 * base_income_sd
+effect_sd = base_income_sd
+
+ethnicities <- c("Indian", "Asian", "Black", "Hispanic", "White", "Arabic")
+genders <- c("Female", "Male")
+
+population <- randomNames::randomNames(population_size, return.complete.data = TRUE) %>%
+  mutate(gender = map_chr(gender, ~ genders[.x + 1]),
+         ethnicity = map_chr(ethnicity, ~ ethnicities[.x])) %>%
+  mutate(across(where(is.character), as.factor)) %>%
+  mutate(income = round(rnorm(population_size, base_income, base_income_sd))) %>%
+  mutate(potential_0 = income) %>%
+  mutate(potential_1 = round(potential_0 +
+           rnorm(population_size, effect_size, effect_sd)))
+
+summary(population)
+
+population %>%
+  ggplot(aes(ethnicity, fill = ethnicity)) +
+  geom_bar()
+
+population %>%
+  ggplot(aes(gender, fill = gender)) +
+  geom_bar()
+
+population %>%
+  ggplot(aes(income)) +
+  geom_density()
+
+population %>%
+  pivot_longer(c(potential_0, potential_1)) %>%
+  ggplot(aes(value, fill = name)) +
+  geom_density(alpha = 0.2)
+```
+
+## Varying sample size
+
+```{r}
+lapply(sample_sizes, function(sample_size) {
+  population %>%
+    sample_n(sample_size) %>%
+    select(first_name, starts_with("potential_")) %>%
+    mutate(true_tx_effect = potential_1 - potential_0) %>%
+    # mutate(group = if_else(rbinom(n(), 1, 0.5) == 1, "treatment", "control")) %>%
+    arrange(runif(n())) %>%
+    mutate(group = if_else(row_number() < n() / 2, "treatment", "control")) %>%
+    arrange(runif(n())) %>%
+    mutate(observed_0 = if_else(group == "control", potential_0,
+                                        NA_real_),
+           observed_1 = if_else(group == "treatment", potential_1,
+                                        NA_real_)) %>%
+    bind_rows(summarise(., across(-c(group, first_name), mean, na.rm = TRUE)) %>%
+                mutate(across(where(is.numeric), round, digits = 1),
+                       first_name = "<<SUMMARY>>")) %>%
+    mutate(observed_tx_effect = observed_1 - observed_0) %>%
+    arrange(desc(row_number()))
+})
+```
