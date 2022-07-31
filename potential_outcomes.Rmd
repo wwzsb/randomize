@@ -31,7 +31,8 @@ population <- randomNames::randomNames(population_size, return.complete.data = T
   mutate(income = round(rnorm(population_size, base_income, base_income_sd))) %>%
   mutate(potential_0 = income) %>%
   mutate(potential_1 = round(potential_0 +
-           rnorm(population_size, effect_size, effect_sd)))
+           rnorm(population_size, effect_size, effect_sd))) %>%
+  mutate(id = row_number())
 
 summary(population)
 
@@ -55,13 +56,14 @@ population %>%
 
 ## Varying sample size
 
+### Full compliance
+
 ```{r}
 lapply(sample_sizes, function(sample_size) {
   population %>%
     sample_n(sample_size) %>%
     select(first_name, starts_with("potential_")) %>%
     mutate(true_tx_effect = potential_1 - potential_0) %>%
-    # mutate(group = if_else(rbinom(n(), 1, 0.5) == 1, "treatment", "control")) %>%
     arrange(runif(n())) %>%
     mutate(group = if_else(row_number() < n() / 2, "treatment", "control")) %>%
     arrange(runif(n())) %>%
@@ -74,5 +76,60 @@ lapply(sample_sizes, function(sample_size) {
                        first_name = "<<SUMMARY>>")) %>%
     mutate(observed_tx_effect = observed_1 - observed_0) %>%
     arrange(desc(row_number()))
+})
+```
+
+### Non-compliance 
+
+```{r}
+#  (3/5 complier, 1/5 nevertaker, 1/5 alwaystaker)
+complier_types <- c("alwaystaker", "alwaystaker",
+                    "nevertaker", "nevertaker",
+                    "complier", "complier", "complier",
+                    "complier", "complier", "complier")
+lapply(sample_sizes, function(sample_size) {
+  population %>%
+    # select sample_size units randomly
+    sample_n(sample_size) %>%
+    # select client name and potential outcomes
+    select(id, first_name, starts_with("potential_")) %>%
+    # calculate true unit-level treatment effect
+    mutate(true_tx_effect = potential_1 - potential_0) %>%
+    # randomly assign treatment and control (50/50)
+    arrange(runif(n())) %>%
+    mutate(group = if_else(row_number() < n() / 2, "treatment", "control")) %>%
+    arrange(runif(n())) %>%
+    # randomly assign complier types
+    # mutate(compliance_group = complier_types[ntile(runif(n()), n = 5)]) %>%
+    mutate(compliance_group = complier_types[floor(10 * runif(n())) + 1]) %>%
+    # set observed outcomes based on control and treatment assignment
+    mutate(observed_0 = if_else(group == "control", potential_0,
+                                        NA_real_),
+           observed_1 = if_else(group == "treatment", potential_1,
+                                        NA_real_)) %>%
+    # set observed outcomes based on complier type
+    mutate(
+      observed_0 = if_else(
+        compliance_group == "alwaystaker" & !is.na(observed_0), potential_1,
+        observed_0),
+      observed_1 = if_else(
+        compliance_group == "nevertaker" & !is.na(observed_1), potential_0,
+        observed_1)) %>%
+    # complier type shares
+    mutate(is_taker_tx = if_else(
+             group == "treatment",
+             compliance_group %in% c("alwaystaker", "complier"), NA),
+           is_taker_ctl = if_else(
+             group == "control",
+             compliance_group %in% c("alwaystaker"), NA)) %>%
+    # calculate summaries
+    bind_rows(
+      summarise(., across(starts_with(c("observed_", "is_")), mean, na.rm = TRUE)) %>%
+        mutate(across(where(is.numeric), round, digits = 1), first_name = "<<SUMMARY>>")
+    ) %>%
+    mutate(observed_itt_effect = observed_1 - observed_0) %>%
+    arrange(desc(row_number())) %>%
+    mutate(alpha = is_taker_tx - is_taker_ctl,
+           cace = observed_itt_effect / alpha)
 })
 ```
