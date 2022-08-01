@@ -8,6 +8,7 @@ An attempt at explaining the potential outcomes in words, code, data, and plots.
 ## Setting up our population
 
 ```{r}
+options(width = 300)
 # install.packages("tidyverse")
 # install.packages("randomNames")
 library(tidyverse)
@@ -92,7 +93,7 @@ lapply(sample_sizes, function(sample_size) {
     # select sample_size units randomly
     sample_n(sample_size) %>%
     # select client name and potential outcomes
-    select(id, first_name, starts_with("potential_")) %>%
+    select(first_name, starts_with("potential_")) %>%
     # calculate true unit-level treatment effect
     mutate(true_tx_effect = potential_1 - potential_0) %>%
     # randomly assign treatment and control (50/50)
