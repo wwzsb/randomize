@@ -3,37 +3,43 @@ title: "Potential Outcomes"
 output: html_notebook
 ---
 
-An attempt at explaining the potential outcomes in words, code, data, and plots.
+From the potential outcomes framework to the intent to treat (ITT) and complier average treatment effects (CACE aka LATE).
 
-## Setting up our population
+```{r message=FALSE, warning=FALSE, include=FALSE}
+install.packages("tidyverse")
+install.packages("randomNames")
+library(tidyverse)
+library(randomNames)
+```
+
+## Generating up our population
+
+Lets define and generate the population we're going to study.
 
 ```{r}
-options(width = 300)
-# install.packages("tidyverse")
-# install.packages("randomNames")
-library(tidyverse)
+population_size <- 1000000
+base_income <- 10000
+base_income_sd <- 1000
+```
 
-population_size <- 1e6
-sample_sizes <- 10 ^ seq(1, log(population_size, 10))
-num_simulations <- 100
-base_income <- 1e4
-base_income_sd <- 1e3
+There are `r population_size` people in our study population. Their base income is `r base_income` dollars with a standard deviation of `r base_income_sd`.
 
-effect_size = 2 * base_income_sd
-effect_sd = base_income_sd
-
+```{r}
 ethnicities <- c("Indian", "Asian", "Black", "Hispanic", "White", "Arabic")
 genders <- c("Female", "Male")
+```
 
+We have `r length(ethnicities)` ethnicities and `r length(genders)` genders in our population.
+
+```{r}
 population <- randomNames::randomNames(population_size, return.complete.data = TRUE) %>%
-  mutate(gender = map_chr(gender, ~ genders[.x + 1]),
-         ethnicity = map_chr(ethnicity, ~ ethnicities[.x])) %>%
+  mutate(id = row_number()) %>%
   mutate(across(where(is.character), as.factor)) %>%
   mutate(income = round(rnorm(population_size, base_income, base_income_sd))) %>%
-  mutate(potential_0 = income) %>%
-  mutate(potential_1 = round(potential_0 +
-           rnorm(population_size, effect_size, effect_sd))) %>%
-  mutate(id = row_number())
+  mutate(income = income + income * (gender * 0.2)) %>%
+  mutate(income = income + income * (ethnicity * 0.1)) %>%
+  mutate(gender = map_chr(gender, ~ genders[.x + 1]),
+         ethnicity = map_chr(ethnicity, ~ ethnicities[.x]))
 
 summary(population)
 
@@ -47,7 +53,32 @@ population %>%
 
 population %>%
   ggplot(aes(income)) +
-  geom_density()
+  geom_density() +
+  facet_grid(ethnicity ~ gender)
+```
+
+**How much more/less income do males make compared to females?**
+
+**On average, which ethnicity makes the most?**
+
+**On average, which ethnicity makes the least?**
+
+**Are there any significant differences in the proportion of genders? If so, which?**
+
+**Are there any significant differences in the proportion of ethnicities? If so, which?**
+
+## Creating our treatment effect (God-mode)
+
+Now that we have a population, we will generate the effects that the policy _will_ have on each individual. Since we have full knowledge and control of this experiment, we will know and define the treatment effect for each individual, along with both of their potential outcomes (with and without treatment). The researcher will _not_ know these values, it is their job to recover these values.
+
+```{r}
+effect_size <- 3000
+effect_sd <- 1000
+
+population <- population %>%
+  mutate(potential_0 = income) %>%
+  mutate(potential_1 = round(
+    potential_0 + rnorm(population_size, effect_size, effect_sd)))
 
 population %>%
   pivot_longer(c(potential_0, potential_1)) %>%
@@ -55,16 +86,42 @@ population %>%
   geom_density(alpha = 0.2)
 ```
 
-## Varying sample size
+**What the mean and standard deviation of the potential outcomes without treatment?**
+
+**What the mean and standard deviation of the potential outcomes with treatment?**
+
+**What is our expected average treatment effect?**
+
+## Estimating the Average Treatment Effect (researcher-mode)
+
+Now we're the researcher and we're given different sample sizes from the population to try to estimate our treatment effect.
+
+```{r}
+sample_sizes <- 10 ^ seq(1, log(population_size, 10))
+```
+
+**What are the different sample sizes we will work with as a researcher?**
+
+**Does the researcher know the values of both potential outcomes for the individuals in their sample?**
+
+**Describe, in a few sentences, how you would try to estimate the ATE from the samples we are given?**
 
 ### Full compliance
 
+First we simulate the RCT with each of the sample sizes from above with _Full Compliance_.
+
+**What are the four different types of individuals in our sample and which of those individuals are assumed to exist and not exist under full compliance?**
+
+The code below simulates random assignment of treatment for each sample size and tries to calculate the observed average treatment effect.
+
+The first row is a summary row taking the average of all of the individual rows below it. The only thing that changes from table to table is the number of individuals in that sample, notice the number of rows in each table in the bottom left hand corner. Scroll to the right to see all the columns.
+
 ```{r}
-lapply(sample_sizes, function(sample_size) {
+invisible(lapply(sample_sizes, function(sample_size) {
   population %>%
     sample_n(sample_size) %>%
-    select(first_name, starts_with("potential_")) %>%
-    mutate(true_tx_effect = potential_1 - potential_0) %>%
+    select(id, first_name, starts_with("potential_")) %>%
+    mutate(unit_tx_effect = potential_1 - potential_0) %>%
     arrange(runif(n())) %>%
     mutate(group = if_else(row_number() < n() / 2, "treatment", "control")) %>%
     arrange(runif(n())) %>%
@@ -72,15 +129,31 @@ lapply(sample_sizes, function(sample_size) {
                                         NA_real_),
            observed_1 = if_else(group == "treatment", potential_1,
                                         NA_real_)) %>%
-    bind_rows(summarise(., across(-c(group, first_name), mean, na.rm = TRUE)) %>%
+    bind_rows(summarise(., across(-c(group, id, first_name), mean, na.rm = TRUE)) %>%
                 mutate(across(where(is.numeric), round, digits = 1),
+                       id = NA,
                        first_name = "<<SUMMARY>>")) %>%
-    mutate(observed_tx_effect = observed_1 - observed_0) %>%
-    arrange(desc(row_number()))
-})
+    mutate(observed_ate = observed_1 - observed_0) %>%
+    arrange(desc(row_number())) %>%
+  select(-id) %>% print()
+}))
 ```
 
+**Try to explain what each column name is referring to.**
+
+**Why are there NA values in observed_0 and observed_1 columns?**
+
+**What is the relationship between potential_0, potential_1, and unit_tx_effect?**
+
+**What is the relatinoship between observed_0, observed_1 and observed_ate?***
+
+**What is our actual treatment effect? What do you notice about the observed ATE as the sample increases?***
+
 ### Non-compliance 
+
+Here we do the same exercise as above but consider the case where we have non-compliers. Specifically we have 60% compliers, 20% never-takers and 20% always-takers. We assume defiers don't exist here. Instead of estimating just the ATE, we're now estimating the intent-to-treat effect (ITT) and the Complier Average Causal Effect (CACE aka LATE) which is the ATE for the compliers.
+
+Scroll to the right to see all the columns.
 
 ```{r}
 #  (3/5 complier, 1/5 nevertaker, 1/5 alwaystaker)
@@ -88,14 +161,15 @@ complier_types <- c("alwaystaker", "alwaystaker",
                     "nevertaker", "nevertaker",
                     "complier", "complier", "complier",
                     "complier", "complier", "complier")
-lapply(sample_sizes, function(sample_size) {
+
+invisible(lapply(sample_sizes, function(sample_size) {
   population %>%
     # select sample_size units randomly
     sample_n(sample_size) %>%
     # select client name and potential outcomes
     select(first_name, starts_with("potential_")) %>%
     # calculate true unit-level treatment effect
-    mutate(true_tx_effect = potential_1 - potential_0) %>%
+    mutate(unit_tx_effect = potential_1 - potential_0) %>%
     # randomly assign treatment and control (50/50)
     arrange(runif(n())) %>%
     mutate(group = if_else(row_number() < n() / 2, "treatment", "control")) %>%
@@ -131,6 +205,15 @@ lapply(sample_sizes, function(sample_size) {
     mutate(observed_itt_effect = observed_1 - observed_0) %>%
     arrange(desc(row_number())) %>%
     mutate(alpha = is_taker_tx - is_taker_ctl,
-           cace = observed_itt_effect / alpha)
-})
+           cace = observed_itt_effect / alpha) %>%
+    print()
+}))
 ```
+
+**Building from your knowledge from the last exercise, describe the new columns in these tables: is_taker_tx, is_taker_ctl, observed_itt_effect, alpha, and cace.**
+
+**What is the relationship between is_taker_tx, is_taker_ctl, and alpha?**
+
+**What is the relationship between obs_itt, obs_alpha, and obs_cace? (obs = observed)**
+
+**What do you notice about alpha and cace as the sample size increases?**
