@@ -20,16 +20,16 @@ Lets define and generate the population we're going to study.
 population_size <- 1000000
 base_income <- 10000
 base_income_sd <- 1000
-```
 
-There are `r population_size` people in our study population. Their base income is `r base_income` dollars with a standard deviation of `r base_income_sd`.
-
-```{r}
 ethnicities <- c("Indian", "Asian", "Black", "Hispanic", "White", "Arabic")
 genders <- c("Female", "Male")
 ```
 
-We have `r length(ethnicities)` ethnicities and `r length(genders)` genders in our population.
+**How many people have we defined to be in our population?**
+
+**What is their expected base income?**
+
+**How many ethnicities are in our population?**
 
 ```{r}
 population <- randomNames::randomNames(population_size, return.complete.data = TRUE) %>%
