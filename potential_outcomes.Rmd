@@ -23,6 +23,13 @@ base_income_sd <- 1000
 
 ethnicities <- c("Indian", "Asian", "Black", "Hispanic", "White", "Arabic")
 genders <- c("Female", "Male")
+
+demographics <- tibble(
+  gender = sample(0:1, population_size, prob = runif(length(genders)),
+                  replace = TRUE),
+  ethnicity = sample(1:6, population_size, prob = runif(length(ethnicities)),
+                     replace = TRUE)
+)
 ```
 
 **How many people have we defined to be in our population?**
@@ -32,7 +39,9 @@ genders <- c("Female", "Male")
 **How many ethnicities are in our population?**
 
 ```{r}
-population <- randomNames::randomNames(population_size, return.complete.data = TRUE) %>%
+population <- randomNames(population_size, return.complete.data = TRUE,
+                          gender = demographics$gender,
+                          ethnicity = demographics$ethnicity) %>%
   mutate(id = row_number()) %>%
   mutate(across(where(is.character), as.factor)) %>%
   mutate(income = round(rnorm(population_size, base_income, base_income_sd))) %>%
@@ -76,7 +85,7 @@ effect_size <- 3000
 effect_sd <- 1000
 
 population <- population %>%
-  mutate(potential_0 = income) %>%
+  mutate(potential_0 = income * 0.9) %>%
   mutate(potential_1 = round(
     potential_0 + rnorm(population_size, effect_size, effect_sd)))
 
@@ -91,6 +100,15 @@ population %>%
 **What the mean and standard deviation of the potential outcomes with treatment?**
 
 **What is our expected average treatment effect?**
+
+## Sampling from the population (researcher mode)
+
+As a researcher, we don't have access to the full population. We typically have a limited set of people we can include in our research study. The first thing we need to do is obtain a study sample from the population. If we have a registry or census with everyone person from the population, we could randomly sample from it.
+
+```{r}
+
+```
+
 
 ## Estimating the Average Treatment Effect (researcher-mode)
 
@@ -120,19 +138,20 @@ The first row is a summary row taking the average of all of the individual rows 
 invisible(lapply(sample_sizes, function(sample_size) {
   population %>%
     sample_n(sample_size) %>%
-    select(id, first_name, starts_with("potential_")) %>%
+    # select(id, first_name, starts_with("potential_")) %>%
     mutate(unit_tx_effect = potential_1 - potential_0) %>%
     arrange(runif(n())) %>%
-    mutate(group = if_else(row_number() < n() / 2, "treatment", "control")) %>%
-    arrange(runif(n())) %>%
+    mutate(group = if_else(row_number() <= n() / 2, "treatment", "control")) %>%
+    arrange(id) %>%
     mutate(observed_0 = if_else(group == "control", potential_0,
                                         NA_real_),
            observed_1 = if_else(group == "treatment", potential_1,
                                         NA_real_)) %>%
-    bind_rows(summarise(., across(-c(group, id, first_name), mean, na.rm = TRUE)) %>%
-                mutate(across(where(is.numeric), round, digits = 1),
-                       id = NA,
-                       first_name = "<<SUMMARY>>")) %>%
+    bind_rows(
+      summarise(., across(where(is.numeric), mean, na.rm = TRUE)) %>%
+        mutate(across(where(is.numeric), round, digits = 1),
+               across(where(is.character), ~ "<<SUMMARY>>"),
+               id = NA)) %>%
     mutate(observed_ate = observed_1 - observed_0) %>%
     arrange(desc(row_number())) %>%
   select(-id) %>% print()
@@ -217,3 +236,8 @@ invisible(lapply(sample_sizes, function(sample_size) {
 **What is the relationship between obs_itt, obs_alpha, and obs_cace? (obs = observed)**
 
 **What do you notice about alpha and cace as the sample size increases?**
+
+```{r}
+
+```
+
