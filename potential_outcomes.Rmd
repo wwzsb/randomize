@@ -3,7 +3,19 @@ title: "Potential Outcomes"
 output: html_notebook
 ---
 
-From the potential outcomes framework to the intent to treat (ITT) and complier average treatment effects (CACE aka LATE).
+This notebook explains the [Potential Outcomes Framework](https://en.wikipedia.org/wiki/Rubin_causal_model) and estimation of Causal Effects, in particular the [Average Treatment Effect](https://en.wikipedia.org/wiki/Average_treatment_effect) and related estimators: the [Intent-to-Treat Effect](https://en.wikipedia.org/wiki/Intention-to-treat_analysis) and the [Complier Average Causal Effect](https://en.wikipedia.org/wiki/Local_average_treatment_effect) (also known as the Local Average Treatment Effect).
+
+Using a generated population as a reference, we examine the implications of random sampling and random assignment of treatment, non-compliance, and consequences of limited sample sizes.
+
+The code needed to run this analysis can be find in the following GitHub [repository](https://github.com/roboton/randomize) where you can download, comment, or make contributions of your own.
+
+## Requirements
+
+First, you will need RStudio to run this notebook. Please download it [here](https://www.rstudio.com/products/rstudio/download/#download) and then install it.
+
+There are two libraries needed to run this R Notebook:
+1. [tidyverse](https://tidyverse.tidyverse.org/) (for data manipulation)
+2. [randomNames](https://cran.r-project.org/web/packages/randomNames/vignettes/randomNames.html) (to generate the population)
 
 ```{r message=FALSE, warning=FALSE, include=FALSE}
 install.packages("tidyverse")
@@ -12,43 +24,51 @@ library(tidyverse)
 library(randomNames)
 ```
 
+You may experience errors trying to install these packages. Your best friend, in this case, is Google. Search for the error messages you receive and try to troubleshoot your way through installing the package. Unfortunately there isn't a consistent solution to these problems as different operating systems and local settings can cause a variety of issues. However, all these issues should be able to be resolved.
+
 ## Generating up our population
 
-Lets define and generate the population we're going to study.
+Lets define and generate the population we're going to study. Below we set some general characteristics:
+- the size of the population,
+- gender and ethnicity demographics and
+- the base level income and variation (standard deviation) of that income.
 
 ```{r}
 population_size <- 1000000
 base_income <- 10000
 base_income_sd <- 1000
 
-ethnicities <- c("Indian", "Asian", "Black", "Hispanic", "White", "Arabic")
-genders <- c("Female", "Male")
+ethnicities <- factor(c("Indian", "Asian", "Black", "Hispanic", "White", "Arabic"))
+genders <- factor(c("Female", "Male"))
 
-demographics <- tibble(
-  gender = sample(0:1, population_size, prob = runif(length(genders)),
-                  replace = TRUE),
-  ethnicity = sample(1:6, population_size, prob = runif(length(ethnicities)),
-                     replace = TRUE)
-)
 ```
 
 **How many people have we defined to be in our population?**
 
 **What is their expected base income?**
 
-**How many ethnicities are in our population?**
+**How many different ethnicities are in our population?**
 
 ```{r}
+demographics <- tibble(
+  gender = sample(genders, population_size, prob = runif(length(genders)),
+                  replace = TRUE),
+  ethnicity = sample(ethnicities, population_size, prob = runif(length(ethnicities)),
+                     replace = TRUE))
+
+income_male_factor <- runif(1)
+income_ethnicity_factor <- runif(1)
+
 population <- randomNames(population_size, return.complete.data = TRUE,
-                          gender = demographics$gender,
-                          ethnicity = demographics$ethnicity) %>%
-  mutate(id = row_number()) %>%
+                          gender = as.numeric(demographics$gender) - 1,
+                          ethnicity = as.numeric(demographics$ethnicity)) %>%
+  mutate(id = factor(row_number())) %>%
   mutate(across(where(is.character), as.factor)) %>%
   mutate(income = round(rnorm(population_size, base_income, base_income_sd))) %>%
-  mutate(income = income + income * (gender * 0.2)) %>%
-  mutate(income = income + income * (ethnicity * 0.1)) %>%
-  mutate(gender = map_chr(gender, ~ genders[.x + 1]),
-         ethnicity = map_chr(ethnicity, ~ ethnicities[.x]))
+  mutate(income = income + income * (gender * income_male_factor)) %>%
+  mutate(income = income + income * (ethnicity * income_ethnicity_factor)) %>%
+  mutate(gender = factor(map_chr(gender, ~ levels(genders)[.x + 1])),
+         ethnicity = factor(map_chr(ethnicity, ~ levels(ethnicities)[.x])))
 
 summary(population)
 
@@ -61,9 +81,9 @@ population %>%
   geom_bar()
 
 population %>%
-  ggplot(aes(income)) +
-  geom_density() +
-  facet_grid(ethnicity ~ gender)
+  ggplot(aes(income, fill = ethnicity, lty = gender)) +
+  geom_density(alpha = 0.2) +
+  facet_wrap(~ ethnicity, ncol = 1)
 ```
 
 **How much more/less income do males make compared to females?**
@@ -72,69 +92,109 @@ population %>%
 
 **On average, which ethnicity makes the least?**
 
-**Are there any significant differences in the proportion of genders? If so, which?**
+**Are there any significant differences in the proportion of genders?**
 
-**Are there any significant differences in the proportion of ethnicities? If so, which?**
+**Are there any significant differences in the proportion of ethnicities?**
 
-## Creating our treatment effect (God-mode)
+## Defining population potential outcomes (God-mode)
 
-Now that we have a population, we will generate the effects that the policy _will_ have on each individual. Since we have full knowledge and control of this experiment, we will know and define the treatment effect for each individual, along with both of their potential outcomes (with and without treatment). The researcher will _not_ know these values, it is their job to recover these values.
+Now that we have a population, we will generate the effects that the policy _will_ have on each individual. Since we have full knowledge and control of this population, we will know the treatment effect for each individual by defining both of their potential outcomes (with and without treatment). The researcher will _not_ know these values, it is their job to recover these values.
 
 ```{r}
 effect_size <- 3000
 effect_sd <- 1000
+income_time_factor <- runif(1)
 
 population <- population %>%
-  mutate(potential_0 = income * 0.9) %>%
+  mutate(potential_0 = income * income_time_factor) %>%
   mutate(potential_1 = round(
     potential_0 + rnorm(population_size, effect_size, effect_sd)))
 
 population %>%
-  pivot_longer(c(potential_0, potential_1)) %>%
+  summarise(across(c(income, potential_0, potential_1), list(`_mean` = mean,
+                                                             `_stddev` = sd))) %>%
+  pivot_longer(everything(), names_sep = "__", names_to = c("metric", "agg")) %>%
+  pivot_wider(names_from = agg)
+
+population %>%
+  pivot_longer(c(income, potential_0, potential_1)) %>%
   ggplot(aes(value, fill = name)) +
-  geom_density(alpha = 0.2)
+  geom_density(alpha = 0.2) +
+  facet_grid(ethnicity ~ gender, scales = "free")
 ```
 
 **What the mean and standard deviation of the potential outcomes without treatment?**
 
 **What the mean and standard deviation of the potential outcomes with treatment?**
 
-**What is our expected average treatment effect?**
+**What is our actual population average treatment effect?**
+
+**What would have happened to incomes if everyone received treatment?**
+
+**What would have happened to incomes if no one received treatment?**
 
 ## Sampling from the population (researcher mode)
 
-As a researcher, we don't have access to the full population. We typically have a limited set of people we can include in our research study. The first thing we need to do is obtain a study sample from the population. If we have a registry or census with everyone person from the population, we could randomly sample from it.
+As a researcher, we usually don't have access to the entire population given a limited research budget. We typically have to choose a subset of this population. Ideally, we should randomly sample from the group of people from the population that we would like to study in our research.
 
-```{r}
-
-```
-
-
-## Estimating the Average Treatment Effect (researcher-mode)
-
-Now we're the researcher and we're given different sample sizes from the population to try to estimate our treatment effect.
+If the policy or research question under consideration applies to everyone, we'll want to randomly sample from the entire population. It could also be that the policy only applies to women, or to certain ethnicities, in which case there's no need to sample from the entire population, only the sub-population (e.g. women or a specific ethnicity) of concern.
 
 ```{r}
 sample_sizes <- 10 ^ seq(1, log(population_size, 10))
+
+population_samples <- map_dfr(sample_sizes, function(sample_size) {
+  population %>%
+    sample_n(sample_size) %>%
+    mutate(sample_size = sample_size)
+})
+
+population_samples %>%
+  ggplot(aes(gender, fill = gender)) +
+  geom_bar() +
+  facet_wrap(~ sample_size, scales = "free_x") +
+  coord_flip()
+
+population_samples %>%
+  ggplot(aes(ethnicity, fill = ethnicity)) +
+  geom_bar() +
+  facet_wrap(~ sample_size, scales = "free_x") +
+  coord_flip()
+
+population_samples %>%
+  ggplot(aes(income)) +
+  geom_histogram(binwidth = 1000) +
+  facet_wrap(~ sample_size, scales = "free")
 ```
 
 **What are the different sample sizes we will work with as a researcher?**
 
+**What do you notice about the distribution of genders, ethnicities, and incomes as sample size increases?**
+
+**How does randomly sampling from the population help in estimating the treatment effect of our program?**
+
+## Estimating the Average Treatment Effect (researcher mode)
+
+Randomly sampling from the population helps ensure our study sample is representative of the population at large. However, randomly sampling from the population does _not_ help us estimate the effect of our policy. In order to estimate the effect of our policy we need to compare _Potential Outcomes_, specifically the potential outcome when someone gets treatment and the outcome when they do not get treatment? The average of the difference between these two potential outcomes is known as the Average Treatment Effect (ATE).
+
 **Does the researcher know the values of both potential outcomes for the individuals in their sample?**
 
-**Describe, in a few sentences, how you would try to estimate the ATE from the samples we are given?**
+**Describe, in a few sentences, how you could estimate the ATE from the samples we are given?**
 
 ### Full compliance
 
-First we simulate the RCT with each of the sample sizes from above with _Full Compliance_.
+In order to be able to estimate the ATE, we need to construct two statistically identical groups with the exception that one of these groups receives treatment while the others do not. This is the core of the [Randomized Controlled Trial](https://en.wikipedia.org/wiki/Randomized_controlled_trial) (RCT).
+
+Certain settings for RCTs ensure that everyone who is in the treatment group gets treatment while no one in the control group receives treatment. This is more difficult to ensure in most cases involving human subjects since human subjects have the freedom to choose to take up the treatment or not. The ability for those in the treatment group to deny treatment and those in the control group to take up treatment is known as non-compliance and the underlying assumption of which types of this non-compliance exists needs to be evaulated on a case-by-case basis.
 
 **What are the four different types of individuals in our sample and which of those individuals are assumed to exist and not exist under full compliance?**
 
-The code below simulates random assignment of treatment for each sample size and tries to calculate the observed average treatment effect.
+First we simulate the RCT with each of the sample sizes from above with _Full Compliance_.
+
+The code below simulates random assignment of treatment to half of the study sample for increasing study sample sizes and tries to calculate the average treatment effect based on what is observed due to treatment assignment.
 
 The first row is a summary row taking the average of all of the individual rows below it. The only thing that changes from table to table is the number of individuals in that sample, notice the number of rows in each table in the bottom left hand corner. Scroll to the right to see all the columns.
 
-```{r}
+```{r full-compliance}
 invisible(lapply(sample_sizes, function(sample_size) {
   population %>%
     sample_n(sample_size) %>%
@@ -170,7 +230,7 @@ invisible(lapply(sample_sizes, function(sample_size) {
 
 ### Non-compliance 
 
-Here we do the same exercise as above but consider the case where we have non-compliers. Specifically we have 60% compliers, 20% never-takers and 20% always-takers. We assume defiers don't exist here. Instead of estimating just the ATE, we're now estimating the intent-to-treat effect (ITT) and the Complier Average Causal Effect (CACE aka LATE) which is the ATE for the compliers.
+Here we do the same exercise as above but consider the case where we have non-compliers. Specifically we have 60% compliers, 20% never-takers and 20% always-takers. We assume defiers do not exist in our population (not always true). Instead of estimating just the ATE, we're now estimating the intent-to-treat effect (ITT) and the Complier Average Causal Effect (CACE aka LATE) which is the ATE for the compliers.
 
 Scroll to the right to see all the columns.
 
@@ -237,7 +297,212 @@ invisible(lapply(sample_sizes, function(sample_size) {
 
 **What do you notice about alpha and cace as the sample size increases?**
 
-```{r}
+## Statistical significance
 
+What does statistical significance mean and how does it relate to sample size? We take the simpler case of Full Compliance from above and simulate the random assignment of treatment 100 times:
+
+```{r}
+num_simulations <- 100
+study_samples <- map(sample_sizes, ~ population %>% sample_n(.x))
+
+simulation_results <- map_dfr(1:num_simulations, function(x) {
+  map_dfr(study_samples, function(study_sample) {
+    study_sample %>%
+      arrange(runif(n())) %>%
+      mutate(group = if_else(row_number() <= n() / 2, "treatment", "control")) %>%
+      arrange(id) %>%
+      mutate(observed_0 = if_else(group == "control", potential_0,
+                                          NA_real_),
+             observed_1 = if_else(group == "treatment", potential_1,
+                                          NA_real_)) %>%
+      mutate(sample_size = n()) %>%
+      summarise(t_test = list(t.test(observed_1, observed_0)),
+                across(where(is.numeric), mean, na.rm = TRUE)) %>%
+      mutate(observed_ate = observed_1 - observed_0,
+             p_value = map_dbl(t_test, ~ .x$p.value),
+             confint_left = map_dbl(t_test, ~ .x$conf.int[[1]]),
+             confint_right = map_dbl(t_test, ~ .x$conf.int[[2]]))
+  })
+})
+
+simulation_results %>%
+  ggplot(aes(observed_ate)) +
+  geom_histogram(binwidth = 100) +
+  facet_wrap(~ sample_size, scales = "free_y")
+
+# simulation_results %>%
+#   ggplot(aes(p_value, fill = sample_size)) +
+#   # geom_density(alpha = 0.1) +
+#   geom_histogram(binwidth = 0.01) +
+#   facet_wrap(~ sample_size, scales = "free_y")
+# 
+# simulation_results %>%
+#   filter(sample_size == 1000000) %>%
+#   select(p_value, confint_left, observed_ate, confint_right) %>%
+#   mutate(covered = observed_ate[1] > confint_left & observed_ate[1] < confint_right) %>%
+#   summarise(mean(covered), p_value = p_value[1])
 ```
 
+**What do you notice about the distribution of ATEs we get from the simulations with different sample sizes?**
+
+## A coding walkthrough
+
+Maybe this all makes sense to you but the coding is still hard to fully understand. That's understandable! Coding is like any language, it takes a long time to learn, practice and understand. Let's walk through the code that generated the tables from teh Full Compliance section above: \@ref(tab:full-compliance).
+
+```
+population %>%
+  sample_n(sample_size) %>%
+  mutate(unit_tx_effect = potential_1 - potential_0) %>%
+  arrange(runif(n())) %>%
+  mutate(group = if_else(row_number() <= n() / 2, "treatment", "control")) %>%
+  arrange(id) %>%
+  mutate(observed_0 = if_else(group == "control", potential_0,
+                                      NA_real_),
+         observed_1 = if_else(group == "treatment", potential_1,
+                                      NA_real_)) %>%
+  bind_rows(
+    summarise(., across(where(is.numeric), mean, na.rm = TRUE)) %>%
+      mutate(across(where(is.numeric), round, digits = 1),
+             across(where(is.character), ~ "<<SUMMARY>>"),
+             id = NA)) %>%
+  mutate(observed_ate = observed_1 - observed_0) %>%
+  arrange(desc(row_number())) %>%
+  select(-id)
+```
+
+We go through this line by line. First it's simply the population data frame we generated at the beginning. A `data frame` is simply data arranged as a table of rows and columns.
+
+```{r}
+population
+```
+
+We define a variable called `sample_size` and give it a value of 100.
+
+```{r}
+sample_size <- 100
+```
+
+We then randomly sample, in this case, `sample_size` number of rows from this data frame:
+
+```{r}
+population %>%
+  sample_n(sample_size)
+```
+
+Next we `mutate` the data frame by adding a new column called `unit_tx_effect` which is defined as `potential_1` - `potential_0` the difference between the two potential outcomes.  The verb `mutate` simply means that we're modifying or adding to the data frame with this operation.
+
+```{r}
+population %>%
+  sample_n(sample_size) %>%
+  mutate(unit_tx_effect = potential_1 - potential_0)
+```
+You will notice that this new column is created as the last (right-most) column of this data frame.
+
+Next, we `arrange` the rows of the data frame by `runif(n())`.
+
+```{r}
+population %>%
+  sample_n(sample_size) %>%
+  mutate(unit_tx_effect = potential_1 - potential_0) %>%
+  arrange(runif(n()))
+```
+ The `runif(n())` function simply generates random chosen numbers between 0 and 1 for each row in the data frame. `arrange` sorts the data frame by this row and we have rows that are now in random order.
+ 
+ You can play with `runif()` below to see how it works:
+
+```{r}
+runif(10)
+```
+
+Why did we order the rows randomly? Well this leads to our next step in `mutate`-ing the first half of the rows as treatment, and the second half of the rows as control. Since they are randomly ordered, this will create our random assignment of treatment.
+
+```{r}
+population %>%
+  sample_n(sample_size) %>%
+  mutate(unit_tx_effect = potential_1 - potential_0) %>%
+  arrange(runif(n())) %>%
+  mutate(group = if_else(row_number() <= n() / 2, "treatment", "control"))
+```
+
+The `if_else(row_number() <= n() / 2, "treatment", "control")` expression tells us that if the row number is less than or equal to the total row numbers divided by 2, assign the value `treatment` otherwise assign the value `control`. You will notice a new column called `group` created on the rightmost side of this data frame.
+
+The next `arrange` simply orders the rows in the original `id` order, there's no special reason to do this except keeping our data frame in order of id numbers. The next step defines some more columns in our data frame. 
+
+```{r}
+population %>%
+  sample_n(sample_size) %>%
+  mutate(unit_tx_effect = potential_1 - potential_0) %>%
+  arrange(runif(n())) %>%
+  mutate(group = if_else(row_number() <= n() / 2, "treatment", "control")) %>%
+  arrange(id) %>%
+  mutate(observed_0 = if_else(group == "control", potential_0,
+                                      NA_real_),
+         observed_1 = if_else(group == "treatment", potential_1,
+                                      NA_real_))
+```
+
+Similar to the `treatment` vs `control` assignment to the `group` column, these two new columns define the observed outcome in the `treatment` group, `observed_1` and the observed outcome in the control group, `observed_0`. The logic should look familiar:
+
+`observed_0 = if_else(group == "control", potential_0, NA_real_)` suggests that if the group column has the value `control` then we should assign `observed_0` the value of the potential outcome without treatment, `potential_0`. Otherwise, the column gets an `NA_real_` value which simply means the data is missing since the individual was in the other `treatment` group. The same applies to the creation of the `observed_1` column.
+
+The next chunk of code beginning with `bind_rows` is fairly complicated and not particularly elegant. I will skip the detailed explanation for now but the purpose of this step is to create a summary row that takes the mean of all the numeric columns of the data and rounds them to the first significant digit. It also replaces columns that are of a non-numeric character type and replaces it will the value `<<SUMMARY>>`. 
+
+```{r}
+population %>%
+  sample_n(sample_size) %>%
+  mutate(unit_tx_effect = potential_1 - potential_0) %>%
+  arrange(runif(n())) %>%
+  mutate(group = if_else(row_number() <= n() / 2, "treatment", "control")) %>%
+  arrange(id) %>%
+  mutate(observed_0 = if_else(group == "control", potential_0,
+                                      NA_real_),
+         observed_1 = if_else(group == "treatment", potential_1,
+                                      NA_real_)) %>%
+  bind_rows(
+    summarise(., across(where(is.numeric), mean, na.rm = TRUE)) %>%
+      mutate(across(where(is.numeric), round, digits = 1),
+             across(where(is.character), ~ "<<SUMMARY>>"),
+             id = NA))
+```
+
+Let's do a slight modification of the code by taking out the `bind_rows` function to get an intuition of what might be going on here:
+
+```{r}
+population %>%
+  sample_n(sample_size) %>%
+  mutate(unit_tx_effect = potential_1 - potential_0) %>%
+  arrange(runif(n())) %>%
+  mutate(group = if_else(row_number() <= n() / 2, "treatment", "control")) %>%
+  arrange(id) %>%
+  mutate(observed_0 = if_else(group == "control", potential_0,
+                                      NA_real_),
+         observed_1 = if_else(group == "treatment", potential_1,
+                                      NA_real_)) %>%
+  summarise(., across(where(is.numeric), mean, na.rm = TRUE)) %>%
+  mutate(across(where(is.numeric), round, digits = 1),
+         across(where(is.character), ~ "<<SUMMARY>>"),
+         id = NA)
+```
+We see that we create a single row that averages the values from each numeric column (ignoring the missing NA values) and roudns it to a single significant digit. This row is simply added as the first row in the data frame and then the difference between `observed_1` and `observed_0` is taken as the `observed_ate`:
+
+```{r}
+population %>%
+  sample_n(sample_size) %>%
+  mutate(unit_tx_effect = potential_1 - potential_0) %>%
+  arrange(runif(n())) %>%
+  mutate(group = if_else(row_number() <= n() / 2, "treatment", "control")) %>%
+  arrange(id) %>%
+  mutate(observed_0 = if_else(group == "control", potential_0,
+                                      NA_real_),
+         observed_1 = if_else(group == "treatment", potential_1,
+                                      NA_real_)) %>%
+  bind_rows(
+    summarise(., across(where(is.numeric), mean, na.rm = TRUE)) %>%
+      mutate(across(where(is.numeric), round, digits = 1),
+             across(where(is.character), ~ "<<SUMMARY>>"),
+             id = NA)) %>%
+  mutate(observed_ate = observed_1 - observed_0) %>%
+  arrange(desc(row_number())) %>%
+  select(-id)
+```
+As a finishing touch we reverse the order of the rows so that the newly added summary row is on top, and then remove the `id` column to reduce the number of columns of the data frame displayed.
